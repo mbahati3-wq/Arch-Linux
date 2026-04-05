@@ -6,7 +6,9 @@
 # ============================================
 
 # Source color library for colorful output
-source ../lib/global-color.sh
+DISK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PARENT_DIR="$(dirname "$DISK_DIR")"
+source "${PARENT_DIR}/lib/global-color.sh"
 
 # ============================================
 # Configuration Variables (Easily Changeable)

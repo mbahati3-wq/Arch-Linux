@@ -6,7 +6,9 @@
 # ============================================
 
 # Source color library
-source ../lib/global-color.sh
+BOOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PARENT_DIR="$(dirname "$BOOT_DIR")"
+source "${PARENT_DIR}/lib/global-color.sh"
 
 # ============================================
 # Configuration Variables

@@ -22,5 +22,3 @@ print_status "Step 3: Setting up bootloader..."
 sudo ./boot/bootloader-setup.sh || exit 1
 
 print_success "Installation Complete! System ready for reboot."
-
-.

@@ -5,7 +5,7 @@
 # Run this inside arch-chroot
 # ============================================
 
-source ../lib/global-color.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"/../lib/global-color.sh
 
 # Configuration (match your partitioner settings)
 VG_NAME="${VG_NAME:-vg0}"

@@ -6,8 +6,8 @@
 # ============================================
 
 # Source color functions if available
-if [[ -f "$(dirname "${BASH_SOURCE[0]}")/colorful.sh" ]]; then
-    source "$(dirname "${BASH_SOURCE[0]}")/colorful.sh"
+if [[ -f "$(dirname "${BASH_SOURCE[0]}")/color.sh" ]]; then
+    source "$(dirname "${BASH_SOURCE[0]}")/color.sh"
 fi
 
 # Logger configuration

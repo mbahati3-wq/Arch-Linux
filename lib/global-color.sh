@@ -209,6 +209,15 @@ print_package() {
     print_color "${ICON_PACKAGE} $message" "green" "INFO" "$component"
 }
 
+print_phase() {
+    local message="$1"
+    local component="${2:-PHASE}"
+    local separator=$(printf '=%.0s' {1..50})
+    print_color "\n${BOLD}${CYAN}${separator}${NC}" "cyan" "INFO" "$component"
+    print_color "${BOLD}${CYAN}▶ $message${NC}" "cyan" "INFO" "$component"
+    print_color "${BOLD}${CYAN}${separator}${NC}\n" "cyan" "INFO" "$component"
+}
+
 # Command execution with dual output (console + log)
 run_and_log() {
     local cmd="$1"
@@ -411,6 +420,7 @@ export -f print_input
 export -f print_network
 export -f print_disk
 export -f print_package
+export -f print_phase
 export -f run_and_log
 export -f log_command_output
 export -f log_file_content
