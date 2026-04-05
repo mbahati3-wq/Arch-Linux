@@ -11,8 +11,13 @@ if [[ -f "$(dirname "${BASH_SOURCE[0]}")/color.sh" ]]; then
 fi
 
 # Logger configuration
-readonly LOG_DIR="/var/log/arch-automation"
-readonly SESSION_ID=$(date +"%Y%m%d_%H%M%S")
+# Use /var/log if running as root, otherwise use local ./logs directory
+SESSION_ID=$(date +"%Y%m%d_%H%M%S")
+if [[ $EUID -eq 0 ]]; then
+    readonly LOG_DIR="/var/log/arch-automation"
+else
+    readonly LOG_DIR="./logs"
+fi
 readonly LOG_FILE="${LOG_DIR}/arch_install_${SESSION_ID}.log"
 readonly ERROR_LOG="${LOG_DIR}/arch_install_${SESSION_ID}_errors.log"
 readonly DEBUG_LOG="${LOG_DIR}/arch_install_${SESSION_ID}_debug.log"
@@ -36,18 +41,23 @@ LOG_LEVEL=${LOG_LEVEL:-6}  # Default to INFO
 # Create log directory if it doesn't exist
 setup_log_directories() {
     if [[ ! -d "$LOG_DIR" ]]; then
-        sudo mkdir -p "$LOG_DIR" 2>/dev/null || mkdir -p "$LOG_DIR"
-        sudo chmod 755 "$LOG_DIR" 2>/dev/null || chmod 755 "$LOG_DIR"
+        # Try with sudo first (for /var/log), then without
+        if ! sudo mkdir -p "$LOG_DIR" 2>/dev/null && ! mkdir -p "$LOG_DIR" 2>/dev/null; then
+            # If both fail, create local logs directory
+            mkdir -p "./logs" 2>/dev/null || true
+            return 0
+        fi
+        sudo chmod 755 "$LOG_DIR" 2>/dev/null || chmod 755 "$LOG_DIR" 2>/dev/null || true
     fi
     
-    # Initialize log files
+    # Initialize log files (ignore permission errors)
     for log_file in "$LOG_FILE" "$ERROR_LOG" "$DEBUG_LOG"; do
-        touch "$log_file"
+        touch "$log_file" 2>/dev/null || true
         chmod 644 "$log_file" 2>/dev/null || true
     done
     
     # Write session header
-    write_log_header
+    write_log_header 2>/dev/null || true
 }
 
 # Write session header to all logs
@@ -65,9 +75,10 @@ Script: ${0}
 EOF
 )
     
-    echo "$header" >> "$LOG_FILE"
-    echo "$header" >> "$ERROR_LOG"
-    echo "$header" >> "$DEBUG_LOG"
+    # Write to log files, ignoring permission errors
+    echo "$header" >> "$LOG_FILE" 2>/dev/null || true
+    echo "$header" >> "$ERROR_LOG" 2>/dev/null || true
+    echo "$header" >> "$DEBUG_LOG" 2>/dev/null || true
 }
 
 # Core logging function
@@ -82,17 +93,17 @@ log_message() {
     if [[ $level -le $LOG_LEVEL ]]; then
         local log_entry="[$timestamp] [$level_name] ${component:+[$component]} $message"
         
-        # Always write to main log
-        echo "$log_entry" >> "$LOG_FILE"
+        # Always write to main log (ignore permission errors)
+        echo "$log_entry" >> "$LOG_FILE" 2>/dev/null || true
         
-        # Write to error log for errors and above
+        # Write to error log for errors and above (ignore permission errors)
         if [[ $level -le 3 ]]; then
-            echo "$log_entry" >> "$ERROR_LOG"
+            echo "$log_entry" >> "$ERROR_LOG" 2>/dev/null || true
         fi
         
-        # Write to debug log for debug and trace
+        # Write to debug log for debug and trace (ignore permission errors)
         if [[ $level -ge 7 ]]; then
-            echo "$log_entry" >> "$DEBUG_LOG"
+            echo "$log_entry" >> "$DEBUG_LOG" 2>/dev/null || true
         fi
         
         # Console output with colors (if available)
@@ -231,25 +242,25 @@ log_system_state() {
     case "$state_type" in
         disk)
             log_info "Disk state:" "SYSTEM"
-            df -h >> "$LOG_FILE"
-            lsblk >> "$LOG_FILE"
+            df -h >> "$LOG_FILE" 2>/dev/null || true
+            lsblk >> "$LOG_FILE" 2>/dev/null || true
             ;;
         network)
             log_info "Network state:" "SYSTEM"
-            ip addr show >> "$LOG_FILE"
-            ping -c 1 archlinux.org >> "$LOG_FILE" 2>/dev/null
+            ip addr show >> "$LOG_FILE" 2>/dev/null || true
+            ping -c 1 archlinux.org >> "$LOG_FILE" 2>/dev/null || true
             ;;
         services)
             log_info "Service state:" "SYSTEM"
-            systemctl list-units --type=service --state=running >> "$LOG_FILE"
+            systemctl list-units --type=service --state=running >> "$LOG_FILE" 2>/dev/null || true
             ;;
         memory)
             log_info "Memory state:" "SYSTEM"
-            free -h >> "$LOG_FILE"
+            free -h >> "$LOG_FILE" 2>/dev/null || true
             ;;
         processes)
             log_info "Process state:" "SYSTEM"
-            ps aux --sort=-%mem | head -20 >> "$LOG_FILE"
+            ps aux --sort=-%mem | head -20 >> "$LOG_FILE" 2>/dev/null || true
             ;;
     esac
 }
@@ -281,7 +292,7 @@ log_hardware() {
     
     # Disk info
     log_info "Disks:" "HARDWARE"
-    lsblk -d -o NAME,SIZE,MODEL | grep -v "loop" >> "$LOG_FILE"
+    lsblk -d -o NAME,SIZE,MODEL | grep -v "loop" >> "$LOG_FILE" 2>/dev/null || true
     
     # GPU info
     if command -v lspci &>/dev/null; then
