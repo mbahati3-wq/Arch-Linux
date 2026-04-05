@@ -1,14 +1,17 @@
 # Arch Linux Automated Installation Suite
 
-A comprehensive, modular Bash automation framework for setting up Arch Linux from scratch with support for advanced configurations including LVM, LUKS encryption, and multiple boot modes.
+A comprehensive, modular Bash automation framework for setting up Arch Linux from scratch with support for advanced configurations including LVM, LUKS encryption, and multiple boot modes (UEFI and BIOS/Legacy).
 
 ## 🎯 Features
 
-- **Full Disk Automation**: Automated partitioning with GPT/UEFI support
+- **Full Disk Automation**: Automated partitioning with GPT/UEFI and MBR/BIOS support
+- **Automatic Boot Mode Detection**: Automatically detects and configures for your system (UEFI, BIOS/Legacy)
 - **LVM Support**: Logical Volume Management with customizable partitions (root, home, var, swap)
 - **LUKS Encryption**: Optional full-disk encryption with sector key management
-- **Multiple Boot Modes**: Automatic detection and configuration for UEFI, BIOS/Legacy boot
-- **GRUB Bootloader**: Comprehensive GRUB configuration with encryption support
+- **Flexible Boot Configuration**: 
+  - **UEFI**: GPT partition table with EFI System Partition (FAT32)
+  - **BIOS**: MBR partition table with BIOS Boot Partition and separate /boot
+- **GRUB Bootloader**: Comprehensive GRUB configuration with encryption support for both boot modes
 - **Package Management**: Flexible package installation with multiple profiles (minimal, server, desktop)
 - **Logging**: Dual-output logging system (console + persistent logs)
 - **Colorful Output**: Rich, informative console output with icons and colors
@@ -46,12 +49,25 @@ Arch-Linux/
 The installation process consists of three main stages:
 
 ### Stage 1: Disk Partitioning
+
+#### For UEFI Systems (GPT Partition Table):
 - Creates GPT partition table
-- Configures EFI partition (512 MiB)
+- Configures EFI System Partition (512 MiB, FAT32)
 - Sets up LVM physical volumes
 - Creates logical volumes for root, home, var, and swap
 - Optionally encrypts logical volumes with LUKS
-- Formats filesystems (EXT4 for Linux partitions, FAT32 for EFI)
+- Formats filesystems appropriately
+
+#### For BIOS/Legacy Systems (MBR Partition Table):
+- Creates MBR partition table
+- Configures BIOS Boot Partition (2 MiB, unformatted) - required by GRUB
+- Creates /boot partition (512 MiB, ext4) - separate from root
+- Sets up LVM physical volumes
+- Creates logical volumes for root, home, var, and swap
+- Optionally encrypts logical volumes with LUKS
+- Formats filesystems appropriately
+
+**Boot Mode Detection**: The system automatically detects whether the live environment is UEFI or BIOS and adjusts partitioning accordingly. You can also force a specific mode with `BOOT_MODE="uefi"` or `BOOT_MODE="bios"`.
 
 ### Stage 2: Package Installation
 - Installs base system and base-development packages
@@ -80,8 +96,11 @@ INSTALL_MODE="desktop"             # minimal, server, or desktop
 ### Disk Partitioning (disk/partitioner.sh)
 
 ```bash
+# Boot mode configuration
+BOOT_MODE="auto"                   # auto, uefi, or bios (auto-detects)
 DISK="/dev/sda"                    # Target disk
-EFI_SIZE="512"                     # EFI partition size (MiB)
+EFI_SIZE="512"                     # EFI partition size (MiB) - UEFI only
+BIOS_BOOT_SIZE="2"                 # BIOS boot partition size (MiB) - BIOS only
 SWAP_SIZE="8192"                   # Swap size (MiB) - 8GB default
 
 # LVM Volume names
@@ -131,7 +150,7 @@ GRUB_CMDLINE_LINUX_DEFAULT="quiet splash"  # Kernel parameters
 ```bash
 # 1. Boot from Arch Linux ISO
 # 2. Clone or fetch this repository
-git clone <repo-url>
+git clone https://github.com/mbahati3-wq/Arch-Linux.git 
 cd Arch-Linux
 
 # 3. Review and modify configuration in main.sh
@@ -141,11 +160,35 @@ vim main.sh
 sudo ./main.sh
 ```
 
+### Boot Mode Configuration
+
+The script automatically detects your boot mode (UEFI or BIOS), but you can override it:
+
+```bash
+# For UEFI systems (default on modern hardware)
+sudo BOOT_MODE="uefi" ./main.sh
+
+# For BIOS/Legacy systems
+sudo BOOT_MODE="bios" ./main.sh
+
+# Auto-detect (recommended)
+sudo BOOT_MODE="auto" ./main.sh
+```
+
+**BIOS-Specific Notes:**
+- BIOS Boot Partition (2 MiB) must exist for GRUB to install properly
+- /boot partition is separate from root and is essential for kernel loading
+- MBR partition table limits disk size to 2TB (use UEFI for larger disks)
+- Legacy BIOS systems boot through MBR boot sector
+
 ### Step-by-Step Manual Execution
 
 ```bash
-# Stage 1: Partition and format disk
+# Stage 1: Partition and format disk (auto-detects UEFI/BIOS)
 sudo DISK="/dev/sda" ./disk/partitioner.sh
+
+# Or force specific boot mode
+sudo DISK="/dev/sda" BOOT_MODE="bios" ./disk/partitioner.sh
 
 # Stage 2: Install packages
 sudo INSTALL_MODE="desktop" ./packages/package-installer.sh
@@ -189,10 +232,25 @@ grep "ERROR" logs/error_*.log
 
 ### Common Issues
 
+**Issue**: GRUB installation fails on BIOS systems
+```
+Solution: Verify BIOS boot partition exists (${DISK}1)
+         Check partition flags: parted /dev/sda print
+         Ensure BIOS Boot Partition is 2 MiB unformatted
+         Verify /boot is mounted properly: mount | grep /boot
+```
+
+**Issue**: System won't boot from BIOS partition
+```
+Solution: Ensure BIOS Boot Partition has correct flags
+         Run: parted /dev/sda set 1 bios_grub on
+         Verify with: parted /dev/sda print
+```
+
 **Issue**: Disk not found
 ```
 Solution: Verify device path with: lsblk
-         Update DISK variable in main.sh
+         Update DISK variable in main.sh or pass via env
 ```
 
 **Issue**: Encryption password not accepted
@@ -238,13 +296,21 @@ sudo ./main.sh
 - **Error logs**: `./logs/error_YYYYMMDD_HHMMSS.log`
 - **Temporary logs**: `/tmp/partitioning_*.log`, `/tmp/package_install_*.log`, `/tmp/bootloader_*.log`
 
-## 🔄 Errors Fixed in This Version
+## 🔄 Errors Fixed & Features Added
 
+### Previous Fixes:
 1. ✅ Fixed stray `.` character in main.sh causing syntax error
 2. ✅ Fixed incorrect library reference in logger.sh (`colorful.sh` → `color.sh`)
 3. ✅ Fixed relative path sourcing in subdirectory scripts using absolute paths
 4. ✅ Added missing `print_phase()` function to global-color.sh library
 5. ✅ Proper path handling for scripts run from different contexts
+
+### New Features Added:
+6. ✅ **BIOS/Legacy Boot Support**: Complete BIOS-bootable system with MBR partition table
+7. ✅ **Boot Mode Auto-Detection**: Automatically detects UEFI or BIOS and configures accordingly
+8. ✅ **Flexible Boot Configuration**: Works seamlessly on both modern UEFI and legacy BIOS systems
+9. ✅ **Separate /boot Partition for BIOS**: Creates dedicated boot partition for BIOS systems
+10. ✅ **BIOS Boot Partition Management**: Proper BIOS boot partition configuration for GRUB
 
 ## 📚 Additional Resources
 

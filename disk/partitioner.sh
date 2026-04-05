@@ -2,7 +2,7 @@
 
 # ============================================
 # Arch Linux Disk Partitioner with LVM + LUKS
-# Supports UEFI/GPT, LVM, and Encryption
+# Supports UEFI/GPT, BIOS/MBR, LVM, and Encryption
 # ============================================
 
 # Source color library for colorful output
@@ -14,9 +14,11 @@ source "${PARENT_DIR}/lib/global-color.sh"
 # Configuration Variables (Easily Changeable)
 # ============================================
 
-# Disk configuration
+# Boot mode and disk configuration
+BOOT_MODE="${BOOT_MODE:-auto}"              # auto, uefi, or bios
 DISK="${DISK:-/dev/sda}"                    # Target disk
-EFI_SIZE="${EFI_SIZE:-512}"                 # EFI partition size in MiB
+EFI_SIZE="${EFI_SIZE:-512}"                 # EFI partition size in MiB (UEFI only)
+BIOS_BOOT_SIZE="${BIOS_BOOT_SIZE:-2}"       # BIOS boot partition size in MiB (BIOS only)
 SWAP_SIZE="${SWAP_SIZE:-8192}"              # Swap size in MiB (8GB default)
 ENABLE_ENCRYPTION="${ENABLE_ENCRYPTION:-true}"  # Enable LUKS encryption
 
@@ -45,6 +47,24 @@ LVM_MOUNT_OPTIONS="${LVM_MOUNT_OPTIONS:-defaults,noatime}"
 
 # Log file for partitioning operations
 LOG_FILE="${LOG_FILE:-/tmp/partitioning_$(date +%Y%m%d_%H%M%S).log}"
+
+# ============================================
+# Boot Mode Detection Function
+# ============================================
+
+detect_boot_mode() {
+    if [[ "$BOOT_MODE" == "auto" ]]; then
+        if [[ -d "/sys/firmware/efi" ]]; then
+            BOOT_MODE="uefi"
+            print_success "Detected UEFI boot mode"
+        else
+            BOOT_MODE="bios"
+            print_info "Detected BIOS/Legacy boot mode"
+        fi
+    else
+        print_info "Using configured boot mode: $BOOT_MODE"
+    fi
+}
 
 # ============================================
 # Helper Functions
@@ -105,10 +125,19 @@ confirm_partitioning() {
     print_info "📋 Partitioning Plan:"
     echo ""
     print_info "Disk: $DISK"
+    print_info "Boot Mode: $BOOT_MODE"
     echo ""
     print_info "📊 Partition Layout:"
-    echo "  ├── ${DISK}1 - EFI System Partition (${EFI_SIZE}MiB, FAT32) → $EFI_MOUNT"
-    echo "  └── ${DISK}2 - LVM Physical Volume (Remaining space)"
+    
+    if [[ "$BOOT_MODE" == "uefi" ]]; then
+        echo "  ├── ${DISK}1 - EFI System Partition (${EFI_SIZE}MiB, FAT32) → $EFI_MOUNT"
+        echo "  └── ${DISK}2 - LVM Physical Volume (Remaining space)"
+    else
+        echo "  ├── ${DISK}1 - BIOS Boot Partition (${BIOS_BOOT_SIZE}MiB, unformatted) → reserved"
+        echo "  ├── ${DISK}2 - Boot Partition (512MiB, ext4) → /boot"
+        echo "  └── ${DISK}3 - LVM Physical Volume (Remaining space)"
+    fi
+    
     echo "       └── 🔐 LUKS Encryption: $ENABLE_ENCRYPTION"
     echo "            └── Volume Group: $VG_NAME"
     echo "                 ├── $LV_ROOT_NAME (${ROOT_SIZE}GiB) → /"
@@ -136,10 +165,16 @@ wipe_disk() {
     # Zap all signatures
     wipefs -a "$DISK" 2>&1 | tee -a "$LOG_FILE"
     
-    # Create new GPT partition table
-    parted "$DISK" mklabel gpt --script 2>&1 | tee -a "$LOG_FILE"
-    
-    print_success "Disk wiped and GPT label created"
+    # Create partition table based on boot mode
+    if [[ "$BOOT_MODE" == "uefi" ]]; then
+        print_status "Creating GPT partition table for UEFI..."
+        parted "$DISK" mklabel gpt --script 2>&1 | tee -a "$LOG_FILE"
+        print_success "Disk wiped and GPT label created"
+    else
+        print_status "Creating MBR partition table for BIOS..."
+        parted "$DISK" mklabel msdos --script 2>&1 | tee -a "$LOG_FILE"
+        print_success "Disk wiped and MBR label created"
+    fi
 }
 
 create_efi_partition() {
@@ -155,14 +190,46 @@ create_efi_partition() {
     print_success "EFI partition created: ${DISK}1"
 }
 
+create_bios_partitions() {
+    print_phase "Creating BIOS Boot Partition Layout"
+    
+    # Create BIOS boot partition (required by GRUB on MBR)
+    print_status "Creating BIOS boot partition (${BIOS_BOOT_SIZE}MiB)..."
+    parted "$DISK" mkpart primary 1MiB ${BIOS_BOOT_SIZE}MiB --script 2>&1 | tee -a "$LOG_FILE"
+    parted "$DISK" set 1 bios_grub on --script 2>&1 | tee -a "$LOG_FILE"
+    print_success "BIOS boot partition created: ${DISK}1"
+    
+    # Create /boot partition (ext4)
+    print_status "Creating /boot partition (512MiB)..."
+    local boot_start=$((BIOS_BOOT_SIZE + 1))
+    local boot_end=$((BIOS_BOOT_SIZE + 512))
+    parted "$DISK" mkpart primary ext4 ${boot_start}MiB ${boot_end}MiB --script 2>&1 | tee -a "$LOG_FILE"
+    mkfs.ext4 "${DISK}2" 2>&1 | tee -a "$LOG_FILE"
+    print_success "/boot partition created: ${DISK}2"
+    
+    # LVM partition will be created next (partition 3)
+}
+
 create_lvm_partition() {
     print_status "Creating LVM partition..."
     
-    # Create LVM partition using remaining space
-    parted "$DISK" mkpart primary ext4 ${EFI_SIZE}MiB 100% --script 2>&1 | tee -a "$LOG_FILE"
-    parted "$DISK" set 2 lvm on --script 2>&1 | tee -a "$LOG_FILE"
+    # Determine which partition number to use based on boot mode
+    local lvm_partition
+    local lvm_start
     
-    print_success "LVM partition created: ${DISK}2"
+    if [[ "$BOOT_MODE" == "uefi" ]]; then
+        lvm_partition="${DISK}2"
+        lvm_start=${EFI_SIZE}MiB
+    else
+        lvm_partition="${DISK}3"
+        lvm_start=$((BIOS_BOOT_SIZE + 512 + 1))MiB
+    fi
+    
+    # Create LVM partition using remaining space
+    parted "$DISK" mkpart primary ext4 ${lvm_start} 100% --script 2>&1 | tee -a "$LOG_FILE"
+    parted "$DISK" set $(echo "$lvm_partition" | grep -o '[0-9]*$') lvm on --script 2>&1 | tee -a "$LOG_FILE"
+    
+    print_success "LVM partition created: $lvm_partition"
 }
 
 # ============================================
@@ -175,7 +242,15 @@ setup_encryption() {
         return 0
     fi
     
-    print_status "Setting up LUKS encryption on ${DISK}2..."
+    # Determine LVM partition based on boot mode
+    local lvm_partition
+    if [[ "$BOOT_MODE" == "uefi" ]]; then
+        lvm_partition="${DISK}2"
+    else
+        lvm_partition="${DISK}3"
+    fi
+    
+    print_status "Setting up LUKS encryption on $lvm_partition..."
     
     # Prompt for passphrase
     echo ""
@@ -185,7 +260,7 @@ setup_encryption() {
         --key-size "$LUKS_KEY_SIZE" \
         --hash "$LUKS_HASH" \
         --use-random \
-        luksFormat "${DISK}2" 2>&1 | tee -a "$LOG_FILE"
+        luksFormat "$lvm_partition" 2>&1 | tee -a "$LOG_FILE"
     
     if [[ $? -ne 0 ]]; then
         print_error "LUKS encryption setup failed"
@@ -194,7 +269,7 @@ setup_encryption() {
     
     # Open the encrypted partition
     print_status "Opening encrypted partition..."
-    cryptsetup open "${DISK}2" "${VG_NAME}" 2>&1 | tee -a "$LOG_FILE"
+    cryptsetup open "$lvm_partition" "${VG_NAME}" 2>&1 | tee -a "$LOG_FILE"
     
     if [[ $? -ne 0 ]]; then
         print_error "Failed to open encrypted partition"
@@ -218,7 +293,12 @@ setup_lvm() {
     if [[ "$ENABLE_ENCRYPTION" == "true" ]]; then
         pv_device="/dev/mapper/${VG_NAME}"
     else
-        pv_device="${DISK}2"
+        # Determine LVM partition based on boot mode
+        if [[ "$BOOT_MODE" == "uefi" ]]; then
+            pv_device="${DISK}2"
+        else
+            pv_device="${DISK}3"
+        fi
     fi
     
     print_status "Setting up LVM on $pv_device..."
@@ -280,8 +360,12 @@ mount_partitions() {
     # Create directories
     mkdir -p /mnt/{boot,home,var}
     
-    # Mount EFI partition
-    mount "${DISK}1" "/mnt${EFI_MOUNT}"
+    # Mount boot and/or EFI partition based on boot mode
+    if [[ "$BOOT_MODE" == "uefi" ]]; then
+        mount "${DISK}1" "/mnt${EFI_MOUNT}"
+    else
+        mount "${DISK}2" /mnt/boot
+    fi
     
     # Mount home
     mount "/dev/${VG_NAME}/${LV_HOME_NAME}" /mnt/home
@@ -306,8 +390,16 @@ generate_crypttab() {
     
     print_status "Generating crypttab..."
     
+    # Determine LVM partition based on boot mode
+    local lvm_partition
+    if [[ "$BOOT_MODE" == "uefi" ]]; then
+        lvm_partition="${DISK}2"
+    else
+        lvm_partition="${DISK}3"
+    fi
+    
     # Get UUID of the encrypted partition
-    local uuid=$(blkid -s UUID -o value "${DISK}2")
+    local uuid=$(blkid -s UUID -o value "$lvm_partition")
     
     # Create crypttab entry
     cat > /mnt/etc/crypttab << EOF
@@ -345,7 +437,8 @@ show_summary() {
     print_success "✅ PARTITIONING COMPLETED SUCCESSFULLY"
     print_success "=========================================="
     echo ""
-    print_info "📊 Partition Layout Summary:"
+    print_info "📊 Boot & Partition Layout Summary:"
+    echo "  Boot Mode: $BOOT_MODE"
     echo ""
     
     lsblk "$DISK" | tee -a "$LOG_FILE"
@@ -374,7 +467,10 @@ show_summary() {
     echo "  2. Generate fstab: genfstab -U /mnt >> /mnt/etc/fstab"
     echo "  3. Chroot: arch-chroot /mnt"
     echo "  4. Configure mkinitcpio to include encrypt and lvm2 hooks"
-    echo "  5. Update GRUB for encryption support"
+    echo "  5. Update GRUB for encryption and LVM support"
+    if [[ "$BOOT_MODE" == "bios" ]]; then
+        echo "  6. Note: BIOS boot - ensure disk signature is written (GPT Hybrid MBR)"
+    fi
 }
 
 # ============================================
@@ -385,6 +481,10 @@ main() {
     clear
     print_info "🚀 Arch Linux Disk Partitioner with LVM + LUKS"
     print_info "============================================="
+    echo ""
+    
+    # Detect boot mode
+    detect_boot_mode
     echo ""
     
     # Validate prerequisites
@@ -405,7 +505,14 @@ main() {
     
     # Execute partitioning steps
     wipe_disk
-    create_efi_partition
+    
+    # Create boot partitions based on boot mode
+    if [[ "$BOOT_MODE" == "uefi" ]]; then
+        create_efi_partition
+    else
+        create_bios_partitions
+    fi
+    
     create_lvm_partition
     
     # Setup encryption if enabled
