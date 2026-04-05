@@ -36,10 +36,12 @@ VAR_SIZE="${VAR_SIZE:-20}"                  # Var partition size (20GB)
 # Swap size is defined above in MiB
 
 # Encryption options
+ENCRYPTION_PRESET="${ENCRYPTION_PRESET:-standard}"  # standard, paranoid, performance, legacy
 LUKS_TYPE="${LUKS_TYPE:-luks2}"             # LUKS version (luks1 or luks2)
 LUKS_CIPHER="${LUKS_CIPHER:-aes-xts-plain64}" # Cipher for encryption
 LUKS_KEY_SIZE="${LUKS_KEY_SIZE:-512}"       # Key size in bits
 LUKS_HASH="${LUKS_HASH:-sha512}"            # Hash algorithm
+ENCRYPTION_ITER_TIME="${ENCRYPTION_ITER_TIME:-0}"  # Iteration time (ms), 0 = default
 
 # Mount points
 EFI_MOUNT="${EFI_MOUNT:-/boot}"             # EFI partition mount point (or /boot/efi)
@@ -64,6 +66,50 @@ detect_boot_mode() {
     else
         print_info "Using configured boot mode: $BOOT_MODE"
     fi
+}
+
+load_encryption_preset() {
+    local preset="$1"
+    
+    case "$preset" in
+        standard)
+            LUKS_TYPE="luks2"
+            LUKS_CIPHER="aes-xts-plain64"
+            LUKS_KEY_SIZE="512"
+            LUKS_HASH="sha512"
+            ENCRYPTION_ITER_TIME="0"
+            print_success "Loaded encryption preset: standard (recommended)"
+            ;;
+        paranoid)
+            LUKS_TYPE="luks2"
+            LUKS_CIPHER="aes-xts-plain64"
+            LUKS_KEY_SIZE="512"
+            LUKS_HASH="sha512"
+            ENCRYPTION_ITER_TIME="4000"
+            print_success "Loaded encryption preset: paranoid (maximum security)"
+            ;;
+        performance)
+            LUKS_TYPE="luks2"
+            LUKS_CIPHER="aes-xts-plain64"
+            LUKS_KEY_SIZE="256"
+            LUKS_HASH="sha256"
+            ENCRYPTION_ITER_TIME="1000"
+            print_success "Loaded encryption preset: performance"
+            ;;
+        legacy)
+            LUKS_TYPE="luks1"
+            LUKS_CIPHER="aes-xts-plain64"
+            LUKS_KEY_SIZE="256"
+            LUKS_HASH="sha1"
+            ENCRYPTION_ITER_TIME="0"
+            print_success "Loaded encryption preset: legacy (LUKS1)"
+            ;;
+        *)
+            print_warning "Unknown encryption preset: $preset, using standard"
+            ENCRYPTION_PRESET="standard"
+            load_encryption_preset "standard"
+            ;;
+    esac
 }
 
 # ============================================
@@ -251,16 +297,29 @@ setup_encryption() {
     fi
     
     print_status "Setting up LUKS encryption on $lvm_partition..."
+    print_info "Encryption details:"
+    echo "  Type: $LUKS_TYPE"
+    echo "  Cipher: $LUKS_CIPHER"
+    echo "  Key Size: ${LUKS_KEY_SIZE} bits"
+    echo "  Hash: $LUKS_HASH"
+    if [[ -n "$ENCRYPTION_ITER_TIME" && "$ENCRYPTION_ITER_TIME" != "0" ]]; then
+        echo "  Iteration Time: ${ENCRYPTION_ITER_TIME}ms"
+    fi
     
     # Prompt for passphrase
     echo ""
     print_info "🔐 Enter encryption passphrase for LUKS:"
-    cryptsetup -y -v --type "$LUKS_TYPE" \
-        --cipher "$LUKS_CIPHER" \
-        --key-size "$LUKS_KEY_SIZE" \
-        --hash "$LUKS_HASH" \
-        --use-random \
-        luksFormat "$lvm_partition" 2>&1 | tee -a "$LOG_FILE"
+    
+    # Build cryptsetup command
+    local cryptsetup_cmd="cryptsetup -y -v --type $LUKS_TYPE --cipher $LUKS_CIPHER --key-size $LUKS_KEY_SIZE --hash $LUKS_HASH --use-random"
+    
+    # Add iteration time if specified
+    if [[ -n "$ENCRYPTION_ITER_TIME" && "$ENCRYPTION_ITER_TIME" != "0" ]]; then
+        cryptsetup_cmd="$cryptsetup_cmd --iter-time $ENCRYPTION_ITER_TIME"
+    fi
+    
+    # Execute encryption
+    eval "$cryptsetup_cmd luksFormat $lvm_partition" 2>&1 | tee -a "$LOG_FILE"
     
     if [[ $? -ne 0 ]]; then
         print_error "LUKS encryption setup failed"
@@ -486,6 +545,12 @@ main() {
     # Detect boot mode
     detect_boot_mode
     echo ""
+    
+    # Load encryption preset if encryption is enabled
+    if [[ "$ENABLE_ENCRYPTION" == "true" ]]; then
+        load_encryption_preset "$ENCRYPTION_PRESET"
+        echo ""
+    fi
     
     # Validate prerequisites
     if ! validate_prerequisites; then

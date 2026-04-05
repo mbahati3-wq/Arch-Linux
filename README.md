@@ -115,12 +115,15 @@ ROOT_SIZE="30"                     # Root partition
 HOME_SIZE="100"                    # Home partition
 VAR_SIZE="20"                      # Var partition
 
-# Encryption
-ENABLE_ENCRYPTION="true"           # Enable LUKS encryption
-LUKS_TYPE="luks2"                  # LUKS version
+# Encryption Configuration
+ENABLE_ENCRYPTION="true"           # Enable LUKS encryption (true/false)
+ENCRYPTION_PRESET="standard"       # Encryption preset: standard, paranoid, performance, legacy
+# OR manually configure:
+LUKS_TYPE="luks2"                  # LUKS version (luks1 or luks2)
 LUKS_CIPHER="aes-xts-plain64"      # Encryption cipher
 LUKS_KEY_SIZE="512"                # Key size (bits)
 LUKS_HASH="sha512"                 # Hash algorithm
+ENCRYPTION_ITER_TIME="0"           # Iteration time (ms), 0 = default
 ```
 
 ### Bootloader Configuration (boot/bootloader-setup.sh)
@@ -180,6 +183,35 @@ sudo BOOT_MODE="auto" ./main.sh
 - /boot partition is separate from root and is essential for kernel loading
 - MBR partition table limits disk size to 2TB (use UEFI for larger disks)
 - Legacy BIOS systems boot through MBR boot sector
+
+### Encryption Configuration
+
+The script supports multiple encryption presets optimized for different security needs:
+
+```bash
+# Standard encryption (recommended, default)
+sudo ENCRYPTION_PRESET="standard" ./main.sh
+
+# Paranoid mode (maximum security, slower unlock)
+sudo ENCRYPTION_PRESET="paranoid" ./main.sh
+
+# Performance mode (balanced speed)
+sudo ENCRYPTION_PRESET="performance" ./main.sh
+
+# Legacy mode (LUKS1 for old systems)
+sudo ENCRYPTION_PRESET="legacy" ./main.sh
+
+# Disable encryption
+sudo ENABLE_ENCRYPTION="false" ./main.sh
+```
+
+**Encryption Presets:**
+- **Standard** (recommended): AES-256-XTS, SHA512, LUKS2 - best for most systems
+- **Paranoid**: AES-256-XTS, SHA512, LUKS2, 4000ms iterations - maximum security for sensitive data
+- **Performance**: AES-128-XTS, SHA256, LUKS2, 1000ms - optimized for speed
+- **Legacy**: AES-256-XTS, SHA1, LUKS1 - for very old systems
+
+See [CRYPTSETUP_GUIDE.md](CRYPTSETUP_GUIDE.md) for detailed encryption documentation.
 
 ### Step-by-Step Manual Execution
 
@@ -335,4 +367,15 @@ This project is provided as-is for educational and personal use.
 
 **Last Updated**: April 5, 2026  
 **Version**: 1.0.0  
-**Status**: Stable
+**Status**: Stable\
+
+
+
+# Auto-detect boot mode (recommended)
+sudo ./main.sh
+
+# Force BIOS mode
+sudo BOOT_MODE="bios" ./main.sh
+
+# Force UEFI mode
+sudo BOOT_MODE="uefi" ./main.sh
